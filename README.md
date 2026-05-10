@@ -1,19 +1,64 @@
-# TR30_Amnezia_xray_split-tunneling
-Config for TR30(TR3000) Amnezia xray VPS with split-tunneling
+# TR30 — Amnezia / Xray, сплит-туннель (sing-box, OpenWrt)
 
-Решил настроить роутер Cudy TR30(TR3000)v1 на работу с Amnezia xray, крутящемся на VPS, 
-но чтобы не весь трафик шел через VPS, а только трафик к конкретным ресурсам.
-Путь экспериментов был долог и в итоге я пришел к такому конфигу:
-  - OpenWRT 24.10.0
-  - sing-box 1.12.12
+## 1. Заполни реквизиты подключения к VPS
 
+В репозитории открой файл **`openwrt-luci-singbox-domains/root/etc/sing-box/config.json`** и подставь свои данные из Amnezia (или с VPS) **вместо заглушек** в outbound с **`"tag": "proxy"`** (тип **`vless`**):
 
-На данном конфиге не работает UDP, поэтому он пока больше как экспериментальный.
-Жду версию sing-box 1.13 в которой пофиксили проблему с UDP
+| Поле в JSON | Что вставить |
+|-------------|----------------|
+| **`server`** | IP или домен VPS (сейчас строка **`REPLACE_VPS_HOST_OR_IP`**) |
+| **`server_port`** | Порт на VPS (часто **443**) |
+| **`uuid`** | UUID клиента (сейчас **`00000000-0000-4000-8000-000000000001`**) |
+| **`tls.server_name`** | SNI для Reality (сейчас **`REPLACE_REALITY_SERVER_NAME`**) |
+| **`tls.reality.public_key`** | Публичный ключ Reality в Base64 (в шаблоне стоит техническая заглушка — **замени на ключ с сервера**) |
+| **`tls.reality.short_id`** | Short ID Reality, hex (в шаблоне заглушка — **замени на свой**) |
 
-Sing-box отправляет весь трафик на tun0(который сам создает)
-Анализирует трафик по dns + route rules.
-После резолва sing-box решает:
-  - домен из списка — трафик идёт через VLESS Reality (xray-out)
-  - локальный/приватный IP — в обход, через direct
-  - всё остальное — direct
+Поле **`flow`**: для VLESS + Vision обычно **`xtls-rprx-vision`** (как в Amnezia).  
+Вход **`tproxy`**: порт **`listen_port`** (**12345**) должен совпадать с **nft TPROXY** на роутере; блоки **`sniff`** и **`sniff_override_destination`** для сплита по доменам не убирай.
+
+Первый деплой **перезапишет** на роутере **`/etc/sing-box/config.json`** из этого файла. Если на роутере уже был свой конфиг — сделай копию или перенеси реквизиты в шаблон в репозитории до шага 2.
+
+---
+
+## 2. Запусти скрипт установки с компьютера
+
+Из каталога **`openwrt-luci-singbox-domains`** (внутри клонированного репозитория):
+
+```sh
+cd openwrt-luci-singbox-domains
+chmod +x scripts/install-to-router.sh
+ROUTER=root@192.168.1.1 ./scripts/install-to-router.sh
+```
+
+На Windows (PowerShell), из того же каталога: **`.\scripts\install-to-router.ps1`**  
+(нужен **OpenSSH Client**). При другом логине/IP: **`ROUTER=root@192.168.1.1`** перед `./scripts/...` или **`$env:ROUTER`** в PowerShell.
+
+Скрипт копирует на роутер **`root/etc`** (в т.ч. **`config.json`**, **`domains.list`**), **`root/usr`**, **`root/www`**.
+
+---
+
+## 3. Зайди на роутер по SSH и выполни
+
+Подставь свой пакет sing-box, если имя другое (`opkg list-installed | grep sing`).
+
+```sh
+ssh root@192.168.1.1
+
+opkg update
+opkg install jq
+opkg install sing-box
+
+chmod +x /usr/bin/singbox-apply-domains /www/cgi-bin/singbox-domains
+sing-box check -c /etc/sing-box/config.json
+/usr/bin/singbox-apply-domains
+/etc/init.d/sing-box enable
+/etc/init.d/sing-box restart
+rm -f /tmp/luci-indexcache
+/etc/init.d/uhttpd restart
+```
+
+Если **`sing-box`** в `opkg` нет для твоей платформы — поставь свой пакет или бинарник, затем те же команды, начиная с **`chmod`**.
+
+Редактор списка доменов: **`http://IP-роутера/cgi-bin/singbox-domains`**.
+
+Дальше на роутере нужны **TPROXY**, **`ip rule` / table 100** и т.д. — см. **`openwrt-luci-singbox-domains/INSTALL.md`**.

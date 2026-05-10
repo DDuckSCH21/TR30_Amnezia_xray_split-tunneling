@@ -1,0 +1,27 @@
+<%+header%>
+
+<h2><%:Sing-box split: proxy domains%></h2>
+
+<p class="cbi-section">
+	<%:Domains listed here are sent through the VPN (sing-box outbound "proxy"). All other traffic uses the default route (direct).%>
+	<br />
+	<%:One entry per line: domain suffix (google.com matches www.google.com), optional *. prefix (*.t.me same as t.me), or IPv4/IPv6 CIDR. Lines starting with # are comments.%>
+</p>
+
+<form method="post" action="<%=pcdata(action_url)%>">
+	<div class="cbi-section">
+		<label for="domains"><%:Domain list%></label><br />
+		<textarea id="domains" name="domains" rows="18" style="width:100%; font-family:monospace;"><%=pcdata(domains)%></textarea>
+	</div>
+	<div class="cbi-page-actions">
+		<input type="hidden" name="apply" value="1" />
+		<input class="cbi-button cbi-button-apply" type="submit" value="<%:Save & Apply%>" />
+	</div>
+</form>
+
+<% if log and #log > 0 then %>
+<h3><%:Last apply log%></h3>
+<pre style="white-space:pre-wrap;word-break:break-word;"><%=pcdata(log)%></pre>
+<% end %>
+
+<%+footer%>

@@ -1,0 +1,82 @@
+#!/bin/sh
+# Merge /etc/sing-box/domains.list into sing-box route.rules:
+#   - host lines -> domain_suffix -> proxy (optional leading *. stripped)
+#   - IPv4/IPv6 CIDR lines -> ip_cidr -> proxy
+# Preserves route rules with .port or (.ip_cidr and outbound != "proxy") e.g. LAN -> direct.
+# Requires: jq without Oniguruma (regex only via grep/sed here).
+
+set -e
+
+CONFIG="/etc/sing-box/config.json"
+LIST="/etc/sing-box/domains.list"
+TMP="${CONFIG}.tmp.$$"
+DOM_TMP="$(mktemp)"
+IPS_TMP="$(mktemp)"
+trap 'rm -f "$DOM_TMP" "$IPS_TMP"' EXIT INT TERM
+
+[ -f "$CONFIG" ] || exit 1
+command -v jq >/dev/null 2>&1 || { echo "jq not installed (opkg install jq)" >&2; exit 1; }
+
+[ -r "$LIST" ] || LIST="/dev/null"
+
+: >"$DOM_TMP"
+: >"$IPS_TMP"
+
+while IFS= read -r raw || [ -n "$raw" ]; do
+	line=$(printf '%s' "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+	[ -z "$line" ] && continue
+	case "$line" in
+		\#*) continue ;;
+	esac
+	line=$(printf '%s' "$line" | sed 's/#.*$//')
+	line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+	[ -z "$line" ] && continue
+
+	if echo "$line" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$'; then
+		case "$line" in
+			*/*) ;;
+			*) line="${line}/32" ;;
+		esac
+		printf '%s\n' "$line" >> "$IPS_TMP"
+	elif echo "$line" | grep -q ':' && echo "$line" | grep -qE '^[0-9a-fA-F:.]+(/[0-9]{1,3})?$'; then
+		case "$line" in
+			*/*) ;;
+			*) line="${line}/128" ;;
+		esac
+		printf '%s\n' "$line" >> "$IPS_TMP"
+	else
+		if echo "$line" | grep -q '^\*\.'; then
+			line="${line#??}"
+		fi
+		line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+		[ -z "$line" ] && continue
+		printf '%s\n' "$line" >> "$DOM_TMP"
+	fi
+done < "$LIST"
+
+if [ -s "$DOM_TMP" ]; then
+	DOMAINS_JSON=$(sort -u "$DOM_TMP" | jq -R . | jq -s .)
+else
+	DOMAINS_JSON='[]'
+fi
+if [ -s "$IPS_TMP" ]; then
+	IPS_JSON=$(sort -u "$IPS_TMP" | jq -R . | jq -s .)
+else
+	IPS_JSON='[]'
+fi
+
+BUILT=$(jq -n --argjson domains "$DOMAINS_JSON" --argjson ips "$IPS_JSON" '{domains: $domains, ips: $ips}')
+
+jq --argjson built "$BUILT" '
+  ($built.domains | length) as $dn
+  | ($built.ips | length) as $in
+  | .route.rules = (
+      (if $dn > 0 then [{"domain_suffix": $built.domains, "outbound": "proxy"}] else [] end)
+      + (if $in > 0 then [{"ip_cidr": $built.ips, "outbound": "proxy"}] else [] end)
+      + [.route.rules[]? | select(.port != null or (.ip_cidr != null and .outbound != "proxy"))]
+    )
+  | .route.final = (.route.final // "direct")
+' "$CONFIG" > "$TMP"
+
+mv "$TMP" "$CONFIG"
+/etc/init.d/sing-box restart

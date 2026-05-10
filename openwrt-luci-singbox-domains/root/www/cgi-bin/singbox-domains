@@ -1,0 +1,71 @@
+#!/bin/sh
+# Fallback UI when LuCI Lua dispatcher is not used (e.g. luci-light).
+# URL: http://<router>/cgi-bin/singbox-domains
+
+LIST="/etc/sing-box/domains.list"
+LOG="/tmp/singbox-apply-domains.log"
+APPLY="/usr/bin/singbox-apply-domains"
+
+allow_client() {
+	case "${REMOTE_ADDR:-}" in
+		127.0.0.1|::1) return 0 ;;
+		192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) return 0 ;;
+		fe80:*) return 0 ;;
+		fd???:*) return 0 ;;
+	esac
+	return 1
+}
+
+# Decode application/x-www-form-urlencoded (domains=...): + -> space, %HH -> byte (/, #, :, %, newline, etc.)
+decode_domains_field() {
+	a=$(printf '%s' "$1" | sed 's/+/ /g')
+	a=$(printf '%s' "$a" | sed 's/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')
+	printf '%b' "$a" | tr -d '\r'
+}
+
+html_escape() {
+	sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
+if ! allow_client; then
+	printf 'Status: 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nForbidden\r\n'
+	exit 0
+fi
+
+if [ "$REQUEST_METHOD" = "POST" ] && [ -n "${CONTENT_LENGTH:-}" ]; then
+	POST_DATA="$(dd bs=1 count="$CONTENT_LENGTH" 2>/dev/null)"
+	RAW="$(printf '%s' "$POST_DATA" | tr '&' '\n' | sed -n 's/^domains=//p' | head -1)"
+	DOMAINS="$(decode_domains_field "$RAW")"
+	mkdir -p "$(dirname "$LIST")"
+	printf '%s' "$DOMAINS" >"$LIST"
+	: >"$LOG"
+	if [ -x "$APPLY" ]; then
+		"$APPLY" >>"$LOG" 2>&1
+	else
+		echo "Missing or not executable: $APPLY" >>"$LOG"
+	fi
+	printf 'Status: 302 Found\r\nLocation: %s\r\nCache-Control: no-store\r\n\r\n' "${SCRIPT_NAME:-/cgi-bin/singbox-domains}"
+	exit 0
+fi
+
+printf 'Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
+DOMAINS_HTML="$( (cat "$LIST" 2>/dev/null || true) | html_escape)"
+LOG_HTML="$( (cat "$LOG" 2>/dev/null || true) | html_escape)"
+cat <<HTML
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Sing-box domains</title>
+<style>body{font-family:system-ui,sans-serif;max-width:900px;margin:24px auto}textarea{width:100%;height:420px;font-family:monospace}code{background:#eee;padding:2px 6px}</style>
+</head><body>
+<h1>Sing-box — домены через VPN</h1>
+<p>По одному в строке: <strong>суффикс домена</strong> (<code>google.com</code> → и <code>www.google.com</code>), или <strong><code>*.t.me</code></strong> (то же, что <code>t.me</code>), или <strong>IPv4/IPv6 CIDR</strong> (<code>91.108.0.0/16</code>). Строки с <code>#</code> — комментарии. После сохранения — <code>singbox-apply-domains</code>.</p>
+<form method="post" enctype="application/x-www-form-urlencoded" action="${SCRIPT_NAME:-/cgi-bin/singbox-domains}">
+  <textarea name="domains">${DOMAINS_HTML}</textarea>
+  <p><button type="submit">Сохранить и применить</button></p>
+</form>
+HTML
+
+if [ -n "$LOG_HTML" ]; then
+	printf '%s\n' '<h2>Лог</h2><pre style="white-space:pre-wrap;word-break:break-word;">'"$LOG_HTML"'</pre>'
+fi
+
+printf '%s\n' '</body></html>'
