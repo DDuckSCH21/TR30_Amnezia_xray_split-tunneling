@@ -19,7 +19,6 @@ $usr = Join-Path $BundleRoot "usr"
 $www = Join-Path $BundleRoot "www"
 
 Write-Host "Копирование на $Router ..."
-# Dropbear на OpenWrt: флаг -O (legacy scp), как на macOS
 $scpArgs = @("-O", "-r", $etc, $usr, $www, "${Router}:/")
 & scp @scpArgs
 if ($LASTEXITCODE -ne 0) {
@@ -28,9 +27,17 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-Write-Host "Права и uhttpd..."
-ssh $Router "chmod +x /usr/bin/singbox-apply-domains /www/cgi-bin/singbox-domains 2>/dev/null; rm -f /tmp/luci-indexcache; /etc/init.d/uhttpd restart 2>/dev/null || true"
+Write-Host "Права, rc.local (TPROXY), uhttpd..."
+$remote = @'
+chmod +x /usr/bin/singbox-apply-domains /usr/bin/singbox-tproxy-up /www/cgi-bin/singbox-domains 2>/dev/null || true
+if [ -f /etc/rc.local ] && ! grep -q singbox-tproxy-up /etc/rc.local; then
+  sed -i '/^exit 0/i sleep 8\n/usr/bin/singbox-tproxy-up' /etc/rc.local
+fi
+rm -f /tmp/luci-indexcache
+/etc/init.d/uhttpd restart 2>/dev/null || true
+'@
+ssh $Router $remote
 
 $hostOnly = ($Router -split "@")[-1]
-Write-Host "Готово (в т.ч. /etc/sing-box/config.json). На роутере см. README.md шаг 3."
+Write-Host "Готово (config.json, domains.list, singbox-tproxy). На роутере см. README.md шаг 3."
 Write-Host "Веб: http://${hostOnly}/cgi-bin/singbox-domains"

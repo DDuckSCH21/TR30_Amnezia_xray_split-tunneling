@@ -30,8 +30,15 @@ run_scp() {
 echo "Копирование на $ROUTER ..."
 run_scp
 
-echo "Права и uhttpd на роутере..."
-ssh "$ROUTER" "chmod +x /usr/bin/singbox-apply-domains /www/cgi-bin/singbox-domains 2>/dev/null; rm -f /tmp/luci-indexcache; /etc/init.d/uhttpd restart 2>/dev/null || true"
+echo "Права, rc.local (TPROXY), uhttpd на роутере..."
+ssh "$ROUTER" sh -s <<'REMOTE'
+chmod +x /usr/bin/singbox-apply-domains /usr/bin/singbox-tproxy-up /www/cgi-bin/singbox-domains 2>/dev/null || true
+if [ -f /etc/rc.local ] && ! grep -q singbox-tproxy-up /etc/rc.local; then
+	sed -i '/^exit 0/i sleep 8\n/usr/bin/singbox-tproxy-up' /etc/rc.local
+fi
+rm -f /tmp/luci-indexcache
+/etc/init.d/uhttpd restart 2>/dev/null || true
+REMOTE
 
-echo "Готово (в т.ч. /etc/sing-box/config.json и domains.list). На роутере см. README.md шаг 3."
+echo "Готово (config.json, domains.list, singbox-tproxy). На роутере см. README.md шаг 3."
 echo "Веб: http://${ROUTER#*@}/cgi-bin/singbox-domains"

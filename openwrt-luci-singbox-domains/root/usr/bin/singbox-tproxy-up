@@ -1,0 +1,28 @@
+#!/bin/sh
+# Поднимает TPROXY (nft) + fwmark/table 100 для sing-box.
+# Автозагрузка: строки в /etc/rc.local (см. INSTALL.md / install-to-router.sh).
+set -e
+LOG=/tmp/singbox-tproxy.log
+echo "=== $(date) ===" >>"$LOG"
+
+/etc/init.d/sing-box running >>"$LOG" 2>&1 || /etc/init.d/sing-box start >>"$LOG" 2>&1
+sleep 1
+
+while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
+while ip rule del fwmark 1 lookup tun0 2>/dev/null; do :; done
+
+ip rule add fwmark 1 table 100
+ip route replace local 0.0.0.0/0 dev lo table 100
+
+nft delete table inet singbox_tproxy 2>/dev/null || true
+nft delete table inet singbox 2>/dev/null || true
+
+NFT=/etc/singbox-tproxy.nft
+if [ ! -f "$NFT" ]; then
+	echo "missing $NFT" >>"$LOG"
+	exit 1
+fi
+nft -f "$NFT"
+echo "OK" >>"$LOG"
+ip rule | grep fwmark >>"$LOG" || true
+ip route show table 100 >>"$LOG" || true
